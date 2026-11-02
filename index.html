@@ -1,0 +1,291 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>TrackiT</title>
+  
+  <!-- Leaflet Map CSS -->
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=" crossorigin=""/>
+  <!-- Inter Font -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com">
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+  <!-- Lucide Icons -->
+  <script src="https://unpkg.com/lucide@latest"></script>
+  <!-- MQTT for peer-to-peer real-time GPS tracking across web/phones -->
+  <script src="https://unpkg.com/mqtt/dist/mqtt.min.js"></script>
+  <!-- Stylesheet -->
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <div class="app-shell">
+    <!-- Header -->
+    <header class="app-header">
+      <div class="header-brand">
+        <div class="brand-icon">
+          <i data-lucide="map-pin"></i>
+        </div>
+        <div class="brand-title">
+          <h1>TrackiT</h1>
+        </div>
+      </div>
+
+      <div class="header-right-tools">
+        <!-- Share Link Button to Track Friends -->
+        <button class="btn btn-primary btn-sm" onclick="openShareModal()">
+          <i data-lucide="smartphone"></i>
+          <span>Track Friend's Phone (GPS)</span>
+        </button>
+
+        <!-- Online Green Dot only (no text) -->
+        <div class="status-indicator-pill" title="System Online">
+          <span class="indicator-dot"></span>
+        </div>
+        
+        <button class="btn btn-icon" id="theme-toggle" title="Toggle Theme" onclick="toggleTheme()">
+          <i data-lucide="moon" id="theme-icon"></i>
+        </button>
+      </div>
+    </header>
+
+    <!-- Main Workspace -->
+    <main class="app-main">
+      <div class="tracker-layout">
+        <!-- Left Sidebar Controls -->
+        <aside class="sidebar">
+          <div class="panel-header">
+            <div class="panel-title">
+              <i data-lucide="sliders"></i>
+              <h3>Tracking Controller</h3>
+            </div>
+            <span class="badge" id="session-counter">Points: 0</span>
+          </div>
+
+          <!-- Primary Actions -->
+          <div class="control-actions">
+            <button class="btn btn-primary btn-block" id="btn-toggle-tracking" onclick="toggleTracking()">
+              <i data-lucide="play"></i> <span id="toggle-text">Start GPS Tracking</span>
+            </button>
+            <div class="btn-group">
+              <button class="btn btn-secondary" onclick="exportGeoJSON()" title="Export path to standard GeoJSON">
+                <i data-lucide="download"></i> GeoJSON
+              </button>
+              <button class="btn btn-secondary" onclick="exportCSV()" title="Export telemetry to CSV">
+                <i data-lucide="file-text"></i> CSV
+              </button>
+              <button class="btn btn-danger-outline" onclick="clearTelemetry()" title="Reset track">
+                <i data-lucide="rotate-ccw"></i> Reset
+              </button>
+            </div>
+          </div>
+
+          <!-- Telemetry HUD -->
+          <div class="telemetry-grid">
+            <div class="metric-card">
+              <span class="metric-title">Latitude</span>
+              <span class="metric-value font-mono" id="hud-lat">--.------°</span>
+            </div>
+            <div class="metric-card">
+              <span class="metric-title">Longitude</span>
+              <span class="metric-value font-mono" id="hud-lng">--.------°</span>
+            </div>
+            <div class="metric-card">
+              <span class="metric-title">Speed</span>
+              <span class="metric-value" id="hud-speed">0.0 <small>km/h</small></span>
+            </div>
+            <div class="metric-card">
+              <span class="metric-title">Accuracy</span>
+              <span class="metric-value" id="hud-accuracy">-- <small>m</small></span>
+            </div>
+            <div class="metric-card">
+              <span class="metric-title">Distance</span>
+              <span class="metric-value" id="hud-distance">0.00 <small>km</small></span>
+            </div>
+            <div class="metric-card">
+              <span class="metric-title">Heading</span>
+              <span class="metric-value" id="hud-heading">--°</span>
+            </div>
+          </div>
+
+          <!-- GIS Layer Options -->
+          <div class="control-card">
+            <label class="section-label">GIS Map Layers</label>
+            <div class="layer-toggles">
+              <label class="layer-toggle-row">
+                <input type="checkbox" id="toggle-breadcrumbs" checked onchange="toggleLayer('breadcrumbs')">
+                <span class="slider-toggle"></span>
+                <span>Breadcrumb Trail Line</span>
+              </label>
+              <label class="layer-toggle-row">
+                <input type="checkbox" id="toggle-accuracy" checked onchange="toggleLayer('accuracy')">
+                <span class="slider-toggle"></span>
+                <span>GPS Accuracy Radius</span>
+              </label>
+              <label class="layer-toggle-row">
+                <input type="checkbox" id="toggle-geofence" checked onchange="toggleLayer('geofence')">
+                <span class="slider-toggle"></span>
+                <span>Geofence Zone (350m)</span>
+              </label>
+              <label class="layer-toggle-row">
+                <input type="checkbox" id="toggle-heatmap" onchange="toggleLayer('heatmap')">
+                <span class="slider-toggle"></span>
+                <span>Location Point Markers</span>
+              </label>
+            </div>
+          </div>
+
+          <!-- Geofence Notification -->
+          <div class="geofence-alert" id="geofence-banner">
+            <i data-lucide="shield-check" id="geofence-icon"></i>
+            <div class="geofence-text">
+              <strong id="geofence-status">Within Geofence Boundary</strong>
+              <small id="geofence-dist">Distance to origin: -- m</small>
+            </div>
+          </div>
+
+          <!-- Section 2: Remote IP & Friend Device Tracker -->
+          <div class="control-card ip-tracker-card">
+            <div class="panel-header-sub">
+              <span class="section-label"><i data-lucide="search"></i> Track Any Device by IP Address</span>
+            </div>
+            <p class="source-hint">Enter any public IP, or a local Wi-Fi IP to resolve geographic location and device details.</p>
+            
+            <div class="ip-input-row">
+              <input type="text" id="target-ip-input" class="form-input" placeholder="e.g. 192.168.1.15 or 105.160.18.25" />
+              <button class="btn btn-primary btn-sm" onclick="trackTargetIP()">
+                <i data-lucide="crosshair"></i> Track IP
+              </button>
+            </div>
+
+            <!-- Quick Preset IP Buttons -->
+            <div class="ip-quick-tags">
+              <span class="quick-tag-label">Presets:</span>
+              <button class="tag-btn" onclick="fillAndSearchIP('192.168.1.45', 'Friend\'s iPhone (Wi-Fi)')">Friend's iPhone (Wi-Fi)</button>
+              <button class="tag-btn" onclick="fillAndSearchIP('192.168.1.88', 'Friend\'s Laptop (Wi-Fi)')">Friend's Laptop (Wi-Fi)</button>
+              <button class="tag-btn" onclick="fillAndSearchIP('105.160.18.25', 'HP Pavilion (Cellular)')">External IP</button>
+            </div>
+
+            <!-- Target Result Box -->
+            <div id="target-ip-result" class="device-result-box" style="display: none;">
+              <div class="device-badge-row">
+                <div class="device-icon-box" id="device-icon-container">
+                  <i data-lucide="laptop" id="device-type-icon"></i>
+                </div>
+                <div>
+                  <h4 id="device-name-display">Detected Device</h4>
+                  <span class="device-model-sub" id="device-os-display">OS & Hardware Model</span>
+                </div>
+              </div>
+              <div class="device-specs-list">
+                <div class="spec-row">
+                  <span class="spec-label">IP Address:</span>
+                  <span class="spec-val font-mono" id="res-ip">--</span>
+                </div>
+                <div class="spec-row">
+                  <span class="spec-label">Type:</span>
+                  <span class="spec-val" id="res-type">--</span>
+                </div>
+                <div class="spec-row">
+                  <span class="spec-label">Location:</span>
+                  <span class="spec-val" id="res-city-country">--</span>
+                </div>
+                <div class="spec-row">
+                  <span class="spec-label">Network / ISP:</span>
+                  <span class="spec-val" id="res-isp">--</span>
+                </div>
+                <div class="spec-row">
+                  <span class="spec-label">Coordinates:</span>
+                  <span class="spec-val font-mono" id="res-coords">--</span>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <!-- Connected Live Devices Panel -->
+          <div class="control-card">
+            <div class="panel-header-sub">
+              <span class="section-label"><i data-lucide="wifi"></i> Live Connected Devices</span>
+              <span class="badge" id="connected-count">0 Live</span>
+            </div>
+            <div id="connected-devices-list" class="connected-list">
+              <span class="empty-hint">No external phones transmitting yet. Click "Track Friend's Phone" to connect one.</span>
+            </div>
+          </div>
+        </aside>
+
+        <!-- Right: Map Viewport -->
+        <div class="map-container">
+          <div id="map"></div>
+
+          <!-- Basemap Floating Switcher (Satellite vs Street) -->
+          <div class="map-floating-panel">
+            <div class="basemap-selector">
+              <button class="base-btn" id="btn-map-street" onclick="setBaseMap('street')">
+                <i data-lucide="map"></i> Streets
+              </button>
+              <button class="base-btn active" id="btn-map-satellite" onclick="setBaseMap('satellite')">
+                <i data-lucide="globe"></i> Satellite Mode
+              </button>
+            </div>
+
+            <button class="btn btn-circle" onclick="recenterMap()" title="Center map">
+              <i data-lucide="locate"></i>
+            </button>
+          </div>
+
+          <!-- Floating Live Speed & Status HUD -->
+          <div class="map-telemetry-hud">
+            <div class="hud-pill">
+              <i data-lucide="gauge"></i>
+              <span id="hud-live-speed">0.0 km/h</span>
+            </div>
+            <div class="hud-pill">
+              <i data-lucide="clock"></i>
+              <span id="hud-timestamp">--:--:--</span>
+            </div>
+          </div>
+        </div>
+      </div>
+    </main>
+
+    <!-- Modal: Share Link with Friend's Phone -->
+    <div id="share-modal" class="modal-overlay" style="display: none;" onclick="closeModalOnBg(event)">
+      <div class="modal-content">
+        <div class="modal-header">
+          <div style="display:flex; align-items:center; gap:8px;">
+            <i data-lucide="smartphone" style="color:var(--accent-blue)"></i>
+            <h3>Track a Friend's Phone via GPS</h3>
+          </div>
+          <button class="btn-close" onclick="closeShareModal()">&times;</button>
+        </div>
+        <div class="modal-body">
+          <p>Send this link to your friend's phone. Works on GitHub Pages, local network, or any connection worldwide without needing to be on the same machine:</p>
+          
+          <div class="step-box">
+            <div class="step-num">1</div>
+            <div>Share this link with your friend:</div>
+          </div>
+          <div class="url-copy-box">
+            <input type="text" id="share-url-input" class="form-input" readonly value="">
+            <button class="btn btn-primary btn-sm" onclick="copyShareUrl()">
+              <i data-lucide="copy"></i> Copy
+            </button>
+          </div>
+
+          <div class="step-box" style="margin-top:14px;">
+            <div class="step-num">2</div>
+            <div>Once opened on their phone, they press <strong>"Transmit Live GPS"</strong>. Their phone will immediately appear live on your Satellite Map!</div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+  </div>
+
+  <!-- Leaflet JS -->
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin=""></script>
+  <!-- Application Script -->
+  <script src="app.js"></script>
+</body>
+</html>
